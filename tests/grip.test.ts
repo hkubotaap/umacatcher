@@ -12,7 +12,9 @@ for (let n = 0; n < trials; n++) {
   if (G.claw) sim.setClawMode(G.claw);
   if (G.terrain) sim.setTerrain(G.terrain);
   if (G.water !== undefined) sim.setWater(G.water);
-  if (G.terrain || G.water !== undefined) sim.refill(expandPlan(G), false);
+  sim.setStickyBars(!!G.bars);
+  sim.towerLayout = G.layout === 'tower';
+  if (G.terrain || G.water !== undefined || G.bars || G.layout) sim.refill(expandPlan(G), false);
   sim.insertCoin();
   // 景品の1つの真上へ移動して落とす
   const pp = sim.prizes[n % sim.prizes.length].parts; const tgt = pp[pp.length >> 1].body.translation();

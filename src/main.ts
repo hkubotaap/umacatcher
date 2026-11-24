@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { Sim, FINGER_LEN, FINGER_R, terrainHeightAt, type Input, type Prize, type TerrainKind } from './sim.ts';
+import { Sim, CHIPS_XL, FINGER_LEN, FINGER_R, terrainHeightAt, type Input, type Prize, type TerrainKind, STICKY_BARS } from './sim.ts';
 import { GENRES, expandPlan, prizeName, type Genre } from './genres.ts';
-import { BLADES, GPU_MODELS, GPU_PRICES, PRICE_DATE, PRICE_SOURCE, fanLayout, shroudSegments, wellHalf, type GpuModel } from './gpu.ts';
+import { BLADES, GPU_MODELS, GPU_PRICES, PRICE_DATE, PRICE_SOURCE, GPU_BRAND, GPU_BRAND_UP, gpuShowName, fanLayout, shroudSegments, wellHalf, type GpuModel } from './gpu.ts';
 import { GameAudio } from './audio.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -250,19 +250,28 @@ const hookMesh = (() => {
   return m;
 })();
 hubMesh.add(hookMesh);
-// 粘着バー: sim.ts の addBar と同じ寸法
-const barMesh = (() => {
+// 固定粘着バー: 台の左右の壁に渡したレール + 上面の粘着テープ(sim.ts の STICKY_BARS と同じ寸法)
+const stickyGroup = (() => {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.016, 0.06), std('#b8bcc8', 0.3, 0.8));
-  const tape = new THREE.Mesh(new THREE.BoxGeometry(0.276, 0.004, 0.056), new THREE.MeshPhysicalMaterial({ color: '#ffd23f', roughness: 0.15, clearcoat: 1, transparent: true, opacity: 0.9 }));
-  tape.position.y = -0.009;
-  body.castShadow = tape.castShadow = true;
-  g.add(body, tape);
-  g.position.y = -0.032;
+  const tapeMat = new THREE.MeshPhysicalMaterial({ color: '#ffd23f', roughness: 0.12, clearcoat: 1, transparent: true, opacity: 0.92 });
+  for (const z of STICKY_BARS.zs) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(STICKY_BARS.hx * 2, STICKY_BARS.hy * 2, STICKY_BARS.hz * 2), metal);
+    rail.position.set(0, STICKY_BARS.y, z);
+    const tape = new THREE.Mesh(new THREE.BoxGeometry(STICKY_BARS.hx * 2 - 0.04, 0.004, STICKY_BARS.hz * 2 - 0.006), tapeMat);
+    tape.position.set(0, STICKY_BARS.y + STICKY_BARS.hy + 0.002, z);
+    rail.castShadow = rail.receiveShadow = tape.castShadow = true;
+    g.add(rail, tape);
+    for (const sx of [-1, 1]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.03, STICKY_BARS.y + STICKY_BARS.hy, STICKY_BARS.hz * 2), metal);
+      post.position.set(sx * (STICKY_BARS.hx - 0.015), (STICKY_BARS.y + STICKY_BARS.hy) / 2, z);
+      post.castShadow = true;
+      g.add(post);
+    }
+  }
   g.visible = false;
+  scene.add(g);
   return g;
 })();
-hubMesh.add(barMesh);
 const fingerMat = std('#f2f2fa', 0.2, 0.95);
 
 // ---------- sim ----------
@@ -578,7 +587,7 @@ function buildPrizeVisual(p: Prize): THREE.Object3D[] {
     out.push(...scallopVisual(p));
     return out;
   } else if (p.type === 'chips') {
-    out.push(...chipsBagVisual(p.variant % 3));
+    out.push(...chipsBagVisual(p.variant % 4));
   } else if (p.type === 'tin') {
     const g = new THREE.Group();
     const c = ['#e63946', '#2ec27e', '#3a86ff'][p.variant % 3];
@@ -850,19 +859,22 @@ function riceBagVisual(white: boolean): THREE.Object3D[] {
 // ---- ポテトチップス BIG(空気入りのビニール袋) ----
 // 寸法 .20 x .26 m。中央 .19m がふくらんだ本体(最大厚 7cm)、上下 3.5cm がぺらぺらの圧着ひれ
 const CHIPS_C = [-0.115, 0, 0.115];
-const chipsGeoCache: THREE.BufferGeometry[] = [];
+const chipsGeoCache = new Map<string, THREE.BufferGeometry>();
 const chipsMat: THREE.Material[] = [];
 let chipsCrease: THREE.CanvasTexture | null = null;
-function chipsThickness(x: number, y: number) {
+function chipsThickness(x: number, y: number, kz = 1) {
   const ay = Math.abs(y);
   if (ay >= 0.095) return 0.007;
   const t = 1 - ay / 0.095;
   const prof = Math.pow(Math.min(1, t * 2.2), 0.6);
   const edge = Math.max(0.12, 1 - Math.pow(Math.min(1, Math.abs(x) / 0.1), 3));
-  return (0.007 + (0.072 - 0.007) * prof) * edge;
+  return (0.007 + (0.072 - 0.007) * prof * kz) * edge;
 }
-function chipsGeo() {
-  if (chipsGeoCache[0]) return chipsGeoCache[0];
+/** ポテチ袋のメッシュ。拡大率 [幅, 高さ, 厚み](ひれの厚みは変えない) */
+function chipsGeo(kx = 1, ky = 1, kz = 1) {
+  const key = `${kx},${ky},${kz}`;
+  const cached = chipsGeoCache.get(key);
+  if (cached) return cached;
   const NX = 36, NY = 56, W = 0.2, H = 0.26;
   const cnt = (NX + 1) * (NY + 1);
   const pos = new Float32Array(cnt * 6), uv = new Float32Array(cnt * 4);
@@ -870,7 +882,7 @@ function chipsGeo() {
     for (let i = 0; i <= NX; i++) {
       const u = i / NX, v = j / NY;
       const x = (u - 0.5) * W, y = (v - 0.5) * H;
-      const hz = chipsThickness(x, y) / 2;
+      const hz = chipsThickness(x, y, kz) / 2;
       const k = j * (NX + 1) + i;
       pos.set([x, y, hz], k * 3);
       pos.set([x, y, -hz], (cnt + k) * 3);
@@ -897,7 +909,6 @@ function chipsGeo() {
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   geo.setIndex(idx);
-  geo.computeVertexNormals();
   const n = cnt * 2;
   const si = new Uint16Array(n * 4), wt = new Float32Array(n * 4);
   for (let i = 0; i < n; i++) {
@@ -910,10 +921,46 @@ function chipsGeo() {
   }
   geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
   geo.setAttribute('skinWeight', new THREE.BufferAttribute(wt, 4));
-  chipsGeoCache[0] = geo;
+  if (kx !== 1 || ky !== 1) geo.scale(kx, ky, 1); // スキン用の重みは拡大前の座標で決めてある
+  geo.computeVertexNormals();
+  chipsGeoCache.set(key, geo);
   return geo;
 }
+/** 白黒パッケージ(インク不足で 2 色印刷になった袋)の 4 倍サイズ版 */
+function drawMonoChipsLabel(c: CanvasRenderingContext2D) {
+  const W = 320, H = 416;
+  c.fillStyle = '#f4f4f2';
+  c.fillRect(0, 0, W, H);
+  const fin = Math.round((0.035 / 0.26) * H);
+  for (const y0 of [0, H - fin]) {
+    const fg = c.createLinearGradient(0, y0, W, y0);
+    fg.addColorStop(0, '#cfd1d6');
+    fg.addColorStop(0.5, '#f1f2f5');
+    fg.addColorStop(1, '#bfc2c9');
+    c.fillStyle = fg;
+    c.fillRect(0, y0, W, fin);
+  }
+  c.fillStyle = '#111';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.font = '900 40px "Yu Gothic UI","Hiragino Sans",sans-serif';
+  c.fillText('ポテトチップズ', W / 2, 92);
+  c.lineWidth = 8;
+  c.strokeStyle = '#111';
+  c.beginPath();
+  c.ellipse(W / 2, 200, 118, 62, -0.06, 0, 7);
+  c.stroke();
+  c.font = '900 76px "Arial Black","Yu Gothic UI",sans-serif';
+  c.fillText('4倍', W / 2, 196);
+  c.font = '900 44px "Yu Gothic UI",sans-serif';
+  c.fillText('うすしお味', W / 2, 308);
+  c.font = '700 20px "Yu Gothic UI",sans-serif';
+  c.fillText('内容量 680g(170g x 4)', W / 2, 352);
+  c.font = '600 14px "Yu Gothic UI",sans-serif';
+  c.fillText('※ 白黒2色パッケージ', W / 2, 376);
+}
 function drawChipsLabel(c: CanvasRenderingContext2D, variant: number) {
+  if (variant === 3) { drawMonoChipsLabel(c); return; }
   const W = 320, H = 416;
   const pal = [
     ['#ffd84a', '#f2a400', '#8a4b00', 'うす塩味'],
@@ -953,9 +1000,9 @@ function drawChipsLabel(c: CanvasRenderingContext2D, variant: number) {
   c.font = '900 44px "Yu Gothic UI","Hiragino Sans",sans-serif';
   c.lineWidth = 9;
   c.strokeStyle = pal[2];
-  c.strokeText('ポテトチップス', W / 2, 98);
+  c.strokeText('ポテトチップズ', W / 2, 98);
   c.fillStyle = '#fff';
-  c.fillText('ポテトチップス', W / 2, 98);
+  c.fillText('ポテトチップズ', W / 2, 98);
   // BIG 爆発マーク
   c.save();
   c.translate(W / 2, 208);
@@ -1012,13 +1059,14 @@ function chipsBagVisual(variant: number): THREE.Object3D[] {
     }
     chipsMat[variant] = new THREE.MeshStandardMaterial({ map: tex, bumpMap: chipsCrease, bumpScale: 1.2, roughness: 0.3, metalness: 0.35, side: THREE.DoubleSide });
   }
+  const [kx, ky, kz] = variant === 3 ? CHIPS_XL : [1, 1, 1];
   const bones = CHIPS_C.map((c) => {
     const b = new THREE.Bone();
-    b.position.set(0, c, 0);
+    b.position.set(0, c * ky, 0);
     b.updateMatrixWorld(true);
     return b;
   });
-  const mesh = new THREE.SkinnedMesh(chipsGeo(), chipsMat[variant]);
+  const mesh = new THREE.SkinnedMesh(chipsGeo(kx, ky, kz), chipsMat[variant]);
   mesh.castShadow = mesh.receiveShadow = true;
   mesh.frustumCulled = false;
   mesh.bind(new THREE.Skeleton(bones), new THREE.Matrix4());
@@ -1102,7 +1150,7 @@ function gpuBoxMats(m: GpuModel): THREE.Material[] {
     drawCardSilhouette(c, m, 372, 146, 0.95, -0.2);
     c.fillStyle = '#fff';
     c.font = '800 20px "Yu Gothic UI",Arial,sans-serif';
-    c.fillText('NVIDIA', 26, 40);
+    c.fillText('NVIDEA', 26, 40);
     c.fillStyle = GREEN;
     c.fillRect(26, 48, 62, 4);
     c.fillStyle = '#fff';
@@ -1110,7 +1158,7 @@ function gpuBoxMats(m: GpuModel): THREE.Material[] {
     c.fillText('G E F O R C E', 26, 92);
     c.fillStyle = GREEN;
     c.font = '900 56px Arial,sans-serif';
-    c.fillText('RTX', 26, 146);
+    c.fillText('RTZ', 26, 146);
     if (m.suffix) {
       c.fillStyle = '#fff';
       c.font = '800 28px Arial,sans-serif';
@@ -1141,7 +1189,7 @@ function gpuBoxMats(m: GpuModel): THREE.Material[] {
     c.fillRect(0, 0, 512, 10);
     c.fillStyle = '#fff';
     c.font = '800 34px Arial,sans-serif';
-    c.fillText('GEFORCE RTX ' + m.num + (m.suffix ? ' ' + m.suffix : ''), 20, 66);
+    c.fillText(GPU_BRAND_UP + ' RTZ ' + m.num + (m.suffix ? ' ' + m.suffix : ''), 20, 66);
     c.fillStyle = '#8f959e';
     c.font = '600 16px Arial,sans-serif';
     c.fillText(m.vram + '  |  ' + m.arch, 20, 96);
@@ -1156,7 +1204,7 @@ function gpuBoxMats(m: GpuModel): THREE.Material[] {
     c.fillText(m.num, 20, 72);
     c.fillStyle = GREEN;
     c.font = '800 24px Arial,sans-serif';
-    c.fillText('RTX', 150, 72);
+    c.fillText('RTZ', 150, 72);
   });
   const mat = (t: THREE.Texture) => new THREE.MeshStandardMaterial({ map: t, roughness: 0.45, metalness: 0.1 });
   const dark = std('#0a0b0c', 0.6);
@@ -1228,7 +1276,7 @@ function gpuCardVisual(p: Prize): THREE.Object3D[] {
     c.fillRect(0, 0, 256, 32);
     c.fillStyle = '#fff';
     c.font = '800 22px Arial,sans-serif';
-    c.fillText('GEFORCE RTX', 12, 24);
+    c.fillText(GPU_BRAND_UP + ' RTZ', 12, 24);
     c.fillStyle = GREEN;
     c.fillText(m.num, 160, 24);
   });
@@ -1644,6 +1692,8 @@ function setGenre(id: string) {
   sim.gripRange = g.gripRange;
   sim.yLow = g.yLow;
   sim.setClawMode(g.claw ?? 'claw');
+  sim.towerLayout = g.layout === 'tower';
+  sim.setStickyBars(!!g.bars);
   boxTexCache.clear();
   applyTheme();
   pileMode = g.pile;
@@ -1667,8 +1717,17 @@ $('mute').addEventListener('click', () => {
   $('mute').textContent = audio.muted ? '🔇 音 OFF' : '🔊 音 ON';
 });
 $('refill').addEventListener('click', () => {
-  if (sim.state !== 'idle') return;
-  sim.refill(planFor(genre, pileMode), pileMode);
+  if (sim.state !== 'idle') { toast('プレイ終了後に補充できます', ''); return; }
+  if (genre.claw === 'stacker') { toast('スタッカー台は補充不要です', ''); return; }
+  if (sim.prizes.length >= 60) { toast('景品がいっぱいです', ''); return; }
+  // いまある景品はそのままに、構成の約 1/3(最低 4 個)を追加する
+  const base = expandPlan(genre);
+  const n = Math.min(60 - sim.prizes.length, Math.max(4, Math.round(base.length / 3)));
+  audio.click();
+  deferRefill(() => {
+    const added = sim.addPrizes(base.sort(() => Math.random() - 0.5).slice(0, n));
+    setTimeout(() => toast('景品を補充', `${added} 個追加(現在 ${sim.prizes.length} 個)`, 1800), 60); // deferRefill が toast を消した後に出す
+  });
 });
 $('layout').addEventListener('click', () => {
   if (sim.state !== 'idle') { toast('プレイ終了後に切り替えられます', ''); return; }
@@ -1766,7 +1825,7 @@ function handleEvents() {
           const bare = e.prize.type === 'gpucard';
           toast(
             'GET!',
-            `GeForce ${m.name}${bare ? '(裸・ファン付き)' : '(箱入り)'}<br>現行価格 ¥${pr.yen.toLocaleString('ja-JP')}${pr.note ? '(' + pr.note + ')' : ''}${pr.rough ? ' ※参考値' : ''}` +
+            `${GPU_BRAND} ${gpuShowName(m.name)}${bare ? '(裸・ファン付き)' : '(箱入り)'}<br>現行価格 ¥${pr.yen.toLocaleString('ja-JP')}${pr.note ? '(' + pr.note + ')' : ''}${pr.rough ? ' ※参考値' : ''}` +
               (bare ? `<br><span style="font-size:18px">${broken ? `ファンの羽 ${broken}/${e.prize.blades!.length} 枚が折れている…` : 'ファンの羽は無傷!'}</span>` : '') +
               `<br><span style="font-size:14px;opacity:.8">${PRICE_SOURCE} ${PRICE_DATE} 時点・新品の目安</span>`,
             5200,
@@ -1820,7 +1879,7 @@ function frame() {
   cable.position.set(hp.x, (top + bot) / 2, hp.z);
   const hookOn = sim.clawMode === 'hook';
   hookMesh.visible = hookOn;
-  barMesh.visible = sim.clawMode === 'bar';
+  stickyGroup.visible = sim.stickyBars;
   for (const g of fingerGroups) g.visible = sim.clawMode === 'claw';
   hubMesh.rotation.z = sim.hubTilt;
   sim.fingers.forEach((f, i) => {

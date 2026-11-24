@@ -86,3 +86,8 @@ export const GPU_PRICES: Record<string, { yen: number; note?: string; rough?: bo
   'RTX 2060': { yen: 59800, note: '12GB版の最安' },
   'RTX 2080 SUPER': { yen: 398800, rough: true },
 };
+
+/** 画面に出すブランド・型番表記(実在の商標とは微妙に違う表記にする)。内部のキー(m.name)は変えない */
+export const GPU_BRAND = 'GeForge';
+export const GPU_BRAND_UP = 'GEFORGE';
+export const gpuShowName = (name: string) => name.replace('RTX', 'RTZ');

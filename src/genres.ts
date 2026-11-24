@@ -1,6 +1,6 @@
 // 台のジャンル定義: 景品構成・テーマ配色・難易度
 import type { PrizeType, TerrainKind } from './sim.ts';
-import { GPU_MODELS } from './gpu.ts';
+import { GPU_BRAND, GPU_BRAND_UP, GPU_MODELS, gpuShowName } from './gpu.ts';
 
 export interface Theme {
   body: string;
@@ -27,8 +27,8 @@ export interface Genre {
   title: string;
   sub: string;
   desc: string;
-  /** [種類, バリアント数, 個数] */
-  plan: Array<[PrizeType, number, number]>;
+  /** [種類, バリアント数, 個数, (省略可)固定バリアント] */
+  plan: Array<[PrizeType, number, number] | [PrizeType, number, number, number]>;
   names: Partial<Record<PrizeType, string[]>>;
   boxLabel: string;
   /** アームの降下深さ(ハブ高さ。小さいほど深く降りる) */
@@ -38,7 +38,11 @@ export interface Genre {
   /** 既定の水面の高さ(m)。省略 = 水なし */
   water?: number;
   /** アーム形式(既定 'claw' = 3 本爪)。'hook' = 1 本のフックで輪・持ち手の穴を狙う */
-  claw?: 'claw' | 'hook' | 'bar';
+  claw?: 'claw' | 'hook' | 'stacker';
+  /** true = 台に固定された粘着バーに景品が貼り付いている(アームで剥ぎ取る) */
+  bars?: boolean;
+  /** 配置: 'tower' = 箱を柱状に積み上げる(崩して落とす) */
+  layout?: 'tower';
   /** 既定の配置: true=雑然と積み上げ / false=整列 */
   pile: boolean;
   /** 持ち上げ時の握力の範囲(小さいほど落としやすい) */
@@ -74,7 +78,7 @@ export const GENRES: Genre[] = [
     desc: '重くて滑りやすい。箱は角を狙ってずらそう',
     plan: [['figure', 5, 10], ['box', 3, 4], ['ball', 3, 3]],
     names: {
-      figure: ['ピカチュウ風フィギュア', 'マリオ風フィギュア', 'ドラえもん風フィギュア', 'ソニック風フィギュア', 'カービィ風フィギュア'],
+      figure: ['ピカチョウ フィギュア', 'マリヲ フィギュア', 'ドラもえん フィギュア', 'ソニッコ フィギュア', 'カーヴィ フィギュア'],
       box: ['箱入りフィギュア(ピンク)', '箱入りフィギュア(ブルー)', '箱入りフィギュア(グリーン)'],
       ball: ['カプセルトイ(赤)', 'カプセルトイ(青)', 'カプセルトイ(黄)'],
     },
@@ -94,7 +98,7 @@ export const GENRES: Genre[] = [
     plan: [['pad', 5, 10], ['game', 4, 4], ['box', 3, 3]],
     names: {
       game: ['ゲームソフト「ウマレース」', 'ゲームソフト「ダービーRPG」', 'ゲームソフト「ホースパズル」', 'ゲームソフト「ギャロップ」'],
-      pad: ['ニンテンドースイッチ風(ネオン)', 'PSP風(ブラック)', 'ゲームボーイアドバンス風(パープル)', 'ニンテンドーDS風(ホワイト)', 'スイッチライト風(イエロー)'],
+      pad: ['ニンテンダー スイッチョ(ネオン)', 'PSB(ブラック)', 'ゲームボーヤ アドバンズ(パープル)', 'ニンテンダーDS(ホワイト)', 'スイッチョ ライト(イエロー)'],
       box: ['ゲーム機BOX(ピンク)', 'ゲーム機BOX(ブルー)', 'ゲーム機BOX(グリーン)'],
     },
     boxLabel: 'GAME BOX',
@@ -113,7 +117,7 @@ export const GENRES: Genre[] = [
     plan: [['sbox', 3, 6], ['bag', 3, 5], ['tin', 3, 4]],
     names: {
       sbox: ['キャラメルBOX', 'チョコレートBOX', 'クッキーBOX'],
-      bag: ['ポテトチップス(うす塩)', 'ポテトチップス(のり)', 'キャンディパック'],
+      bag: ['ポテトチップズ(うす塩)', 'ポテトチップズ(のり)', 'キャンディパック'],
       tin: ['クッキー缶(あか)', 'クッキー缶(みどり)', 'クッキー缶(あお)'],
     },
     boxLabel: 'SWEETS',
@@ -127,16 +131,54 @@ export const GENRES: Genre[] = [
     label: '粘着バー台',
     icon: '🍡',
     title: '🍭 STICKY BAR',
-    sub: 'ねばねばバーでお菓子をペタッ',
-    desc: '爪ではなく粘着バー。景品に触れた瞬間にくっつく。重いと剥がれ落ちるので、軽いものを狙おう',
-    plan: [['sbox', 3, 16]],
-    names: { sbox: ['キャラメルBOX', 'チョコレートBOX', 'クッキーBOX'] },
+    sub: 'ねばねばバーから剥ぎ取れ',
+    desc: '台に固定された粘着バーに景品がベッタリ。粘着は強い! 軽いものほど貼り付きやすいので、アームで持ち上げて剥ぎ取ろう',
+    plan: [['bag', 3, 8], ['sbox', 3, 7]],
+    names: {
+      sbox: ['キャラメルBOX', 'チョコレートBOX', 'クッキーBOX'],
+      bag: ['ポテトチップズ(うす塩)', 'ポテトチップズ(のり)', 'キャンディパック'],
+    },
     boxLabel: 'STICKY',
-    claw: 'bar',
-    pile: true,
-    yLow: 0.05,
-    gripRange: [0.9, 2.2],
+    bars: true,
+    pile: false,
+    yLow: 0.24,
+    gripRange: [1.0, 2.4],
     theme: { body: '#d94f9a', accent: '#ffe14d', side: '#ffb3dc', floorA: '#fff0f7', floorB: '#ffd9ec', backBase: '#ff8fc8', backIcons: ['🍭', '🍡', '🍬'], signA: '#ffe14d', signB: '#ff4fa3', signC: '#7b5cff', signShadow: '#6a1046' },
+  },
+  {
+    id: 'stacker',
+    label: 'スタッカー台',
+    icon: '🧱',
+    title: '🧱 STACKER',
+    sub: '箱を5段積んだら景品ゲット',
+    desc: '左右に動く箱を、ボタンで落として土台に積み上げよう。5段積めば景品。ずれすぎると崩れる',
+    plan: [['figure', 5, 10]],
+    names: {
+      figure: ['ピカチョウ フィギュア', 'マリヲ フィギュア', 'ドラもえん フィギュア', 'ソニッコ フィギュア', 'カーヴィ フィギュア'],
+      box: ['積み木'],
+    },
+    boxLabel: 'STACK',
+    claw: 'stacker',
+    pile: false,
+    yLow: 0.2,
+    gripRange: [1, 1],
+    theme: { body: '#2a8a6a', accent: '#ffd23f', side: '#8fe0c0', floorA: '#e6fff4', floorB: '#bff0dc', backBase: '#1f6f55', backIcons: ['🧱', '⭐'], signA: '#ffd23f', signB: '#ff5a5a', signC: '#1f6f55', signShadow: '#0d3a2b' },
+  },
+  {
+    id: 'tower',
+    label: '箱タワー台',
+    icon: '📦',
+    title: '📦 BOX TOWER',
+    sub: '積んだ箱をくずして落とせ',
+    desc: '箱が柱のように積み上がっている。アームで崩して、落下口へ落とそう',
+    plan: [['box', 3, 24]],
+    names: { box: ['BIG BOX(ピンク)', 'BIG BOX(ブルー)', 'BIG BOX(グリーン)'] },
+    boxLabel: 'TOWER',
+    layout: 'tower',
+    pile: false,
+    yLow: 0.2,
+    gripRange: [0.6, 1.6],
+    theme: { body: '#8a5a2b', accent: '#ffcf5a', side: '#d9b48a', floorA: '#f6e6cf', floorB: '#e7cfa8', backBase: '#a9753f', backIcons: ['📦', '🏗️'], signA: '#ffcf5a', signB: '#e6552b', signC: '#5a3a1a', signShadow: '#3a2410' },
   },
   {
     id: 'rice',
@@ -155,13 +197,13 @@ export const GENRES: Genre[] = [
   },
   {
     id: 'chips',
-    label: 'ポテチBIG台',
+    label: 'ポテチズBIG台',
     icon: '🥔',
-    title: '🥔 POTATO CHIPS BIG',
-    sub: 'ポテトチップス BIG サイズ',
-    desc: '大きくて超軽い空気入りの袋。上下の薄い端(ひれ)をつまむと持ち上がる',
-    plan: [['chips', 3, 12]],
-    names: { chips: ['ポテトチップス BIG うす塩味', 'ポテトチップス BIG のりしお味', 'ポテトチップス BIG コンソメ味'] },
+    title: '🥔 POTATO CHIPZ BIG',
+    sub: 'ポテトチップズ BIG サイズ',
+    desc: '大きくて超軽い空気入りの袋。上下の薄い端(ひれ)をつまむと持ち上がる。白黒パッケージの4倍サイズ袋も混ざっている',
+    plan: [['chips', 3, 12], ['chips', 1, 3, 3]],
+    names: { chips: ['ポテトチップズ BIG うす塩味', 'ポテトチップズ BIG のりしお味', 'ポテトチップズ BIG コンソメ味', 'ポテトチップズ 白黒パッケージ 4倍サイズ'] },
     boxLabel: 'CHIPS',
     pile: true,
     yLow: 0.15,
@@ -209,15 +251,15 @@ export const GENRES: Genre[] = [
     id: 'gpu',
     label: 'グラボ台',
     icon: '🟩',
-    title: '🟩 GEFORCE RTX',
+    title: `🟩 ${GPU_BRAND_UP} RTZ`,
     sub: 'グラフィックスカード各種(箱入り・裸)',
     desc: '重くて高価なグラボ。裸のカードはファンにアームを刺すと掴みやすいが、羽が折れる',
     plan: [['gpubox', GPU_MODELS.length, 8], ['gpucard', GPU_MODELS.length, 6]],
     names: {
-      gpubox: GPU_MODELS.map((m) => `GeForce ${m.name} 箱入り`),
-      gpucard: GPU_MODELS.map((m) => `GeForce ${m.name}(裸・ファン付き)`),
+      gpubox: GPU_MODELS.map((m) => `${GPU_BRAND} ${gpuShowName(m.name)} 箱入り`),
+      gpucard: GPU_MODELS.map((m) => `${GPU_BRAND} ${gpuShowName(m.name)}(裸・ファン付き)`),
     },
-    boxLabel: 'GEFORCE',
+    boxLabel: GPU_BRAND_UP,
     pile: false,
     yLow: 0.15,
     gripRange: [1.4, 2.8],
@@ -227,14 +269,14 @@ export const GENRES: Genre[] = [
 
 export function expandPlan(g: Genre): Array<[PrizeType, number]> {
   const out: Array<[PrizeType, number]> = [];
-  for (const [t, variants, count] of g.plan) {
+  for (const [t, variants, count, fixed] of g.plan) {
     const order = Array.from({ length: variants }, (_, i) => i).sort(() => Math.random() - 0.5);
-    for (let i = 0; i < count; i++) out.push([t, order[i % variants]]);
+    for (let i = 0; i < count; i++) out.push([t, fixed ?? order[i % variants]]);
   }
   return out;
 }
 
-const FALLBACK: Record<string, string> = { plush: 'ぬいぐるみ', box: 'ボックス', figure: 'フィギュア', ball: 'カプセル', game: 'ゲームソフト', pad: '携帯ゲーム機', sbox: 'お菓子', bag: 'お菓子の袋', tin: 'お菓子缶', rice: 'お米(300g)', chips: 'ポテトチップス BIG', crab: 'カニ', kingcrab: 'タラバガニ', scallop: 'ホタテ', gpubox: 'GeForce RTX(箱入り)', gpucard: 'GeForce RTX(裸)' };
+const FALLBACK: Record<string, string> = { plush: 'ぬいぐるみ', box: 'ボックス', figure: 'フィギュア', ball: 'カプセル', game: 'ゲームソフト', pad: '携帯ゲーム機', sbox: 'お菓子', bag: 'お菓子の袋', tin: 'お菓子缶', rice: 'お米(300g)', chips: 'ポテトチップズ BIG', crab: 'カニ', kingcrab: 'タラバガニ', scallop: 'ホタテ', gpubox: `${GPU_BRAND} RTZ(箱入り)`, gpucard: `${GPU_BRAND} RTZ(裸)` };
 export function prizeName(g: Genre, type: PrizeType, variant: number): string {
   return g.names[type]?.[variant] ?? FALLBACK[type];
 }

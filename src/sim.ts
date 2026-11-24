@@ -37,6 +37,8 @@ export interface Prize {
   fans?: number;
   /** ファンの回転角(rad)。動かすと慣性で回る */
   spin?: number;
+  /** スタッカー台の積み木(落ちても獲得扱いにしない) */
+  keep?: boolean;
 }
 
 /** 折れて飛んだファンの羽などの破片(短時間だけ存在) */
@@ -90,8 +92,8 @@ export type SimEvent =
   | { type: 'clap' | 'scuttle'; x: number }
   | { type: 'snap'; x: number; n: number };
 
-export type ArmState = 'idle' | 'ready' | 'descend' | 'close' | 'stick' | 'sweep' | 'lift' | 'carry' | 'release' | 'return';
-export type ClawMode = 'claw' | 'hook' | 'bar';
+export type ArmState = 'idle' | 'ready' | 'descend' | 'close' | 'settle' | 'sweep' | 'lift' | 'carry' | 'release' | 'return';
+export type ClawMode = 'claw' | 'hook' | 'stacker';
 
 // ---- 寸法 (m) ----
 export const HALF = 0.5; // プレイエリア半幅
@@ -138,6 +140,12 @@ export interface Finger {
   joint: RAPIER.RevoluteImpulseJoint;
   theta: number;
 }
+
+/** 固定粘着バー(台の左右の壁に渡したレール)の寸法。描画側(main.ts)と共有 */
+export const STICKY_BARS = { zs: [-0.32, -0.1, 0.12], y: 0.1, hx: 0.5, hy: 0.01, hz: 0.02 };
+/** ポテチ 4 倍サイズ(体積約 4 倍)の拡大率 [幅, 高さ, 厚み]。描画側(main.ts)と共有 */
+export const CHIPS_XL: [number, number, number] = [1.1, 1.5, 2.4];
+const TOWER_COLS: Array<[number, number]> = [[-0.32, -0.32], [-0.1, -0.32], [0.12, -0.32], [-0.32, -0.1], [-0.1, -0.1], [0.12, -0.1], [-0.32, 0.12], [-0.1, 0.12]];
 
 export class Sim {
   world: RAPIER.World;
@@ -259,7 +267,7 @@ export class Sim {
 
   setClawMode(mode: ClawMode) {
     if (mode === this.clawMode) return;
-    this.releaseGlue();
+    if (this.clawMode === 'stacker') this.clearStacker();
     if (this.clawMode === 'claw') {
       for (const f of this.fingers) this.world.removeRigidBody(f.body); // 関節ごと削除される
       this.fingers = [];
@@ -268,71 +276,11 @@ export class Sim {
       this.hookColliders = [];
     }
     if (mode === 'hook') this.addHook();
-    else if (mode === 'bar') this.addBar();
+    else if (mode === 'stacker') { /* 専用の当たり判定なし。積み木をぶら下げる */ }
     else this.buildFingers();
     this.clawMode = mode;
     this.hubTilt = 0;
     this.tiltTarget = 0;
-  }
-
-  // ---- 粘着バー: 横長の粘着バーを降ろして、触れた景品をくっつけて持ち上げる ----
-  private glued: Array<{ p: Prize; joint: RAPIER.ImpulseJoint; thr: number; at: number }> = [];
-  private glueDone = false;
-  static readonly BAR = { hx: 0.14, hy: 0.008, hz: 0.03, cy: -0.032 };
-
-  private addBar() {
-    const B = Sim.BAR;
-    const cd = RAPIER.ColliderDesc.cuboid(B.hx, B.hy, B.hz).setTranslation(0, B.cy, 0).setFriction(1.5).setRestitution(0).setCollisionGroups(G_CLAW);
-    this.hookColliders.push(this.world.createCollider(cd, this.hub));
-  }
-
-  /** バーの底面すぐ下(depth m)にある景品 */
-  private barTouching(depth: number): Prize[] {
-    const B = Sim.BAR, hp = this.hubPos;
-    const bottom = hp.y + B.cy - B.hy;
-    const shape = new RAPIER.Cuboid(B.hx, depth / 2, B.hz);
-    const hit = new Set<number>();
-    this.world.intersectionsWithShape({ x: hp.x, y: bottom - depth / 2, z: hp.z }, { x: 0, y: 0, z: 0, w: 1 }, shape, (c) => {
-      const par = c.parent();
-      if (par) hit.add(par.handle);
-      return true;
-    }, undefined, G_CLAW);
-    return this.prizes.filter((p) => hit.has(p.parts[0].body.handle));
-  }
-
-  private glueTouching() {
-    const hp = this.hubPos;
-    const list = this.barTouching(0.012).filter((p) => !p.anim);
-    if (!list.length) return;
-    const avg = this.prizes.reduce((s, p) => s + p.parts[0].body.mass(), 0) / Math.max(1, this.prizes.length);
-    for (const p of list.slice(0, 5)) {
-      const b = p.parts[0].body, t = b.translation(), q = b.rotation();
-      const jd = RAPIER.JointData.fixed({ x: t.x - hp.x, y: t.y - hp.y, z: t.z - hp.z }, { x: 0, y: 0, z: 0, w: 1 }, { x: 0, y: 0, z: 0 }, { x: -q.x, y: -q.y, z: -q.z, w: q.w });
-      b.wakeUp();
-      const joint = this.world.createImpulseJoint(jd, this.hub, b, true);
-      // 粘着力: 景品が重いほど・粘着力(gripLift)が弱いほど剥がれやすい
-      this.glued.push({ p, joint, thr: this.gripLift * avg * (0.8 + Math.random() * 0.8), at: 0.15 + Math.random() * 0.7 });
-    }
-    this.events.push({ type: 'clawClose' });
-  }
-
-  private releaseGlue() {
-    for (const g of this.glued) this.world.removeImpulseJoint(g.joint, true);
-    this.glued = [];
-    this.glueDone = false;
-  }
-
-  private updateGlue(shake: boolean) {
-    for (let i = this.glued.length - 1; i >= 0; i--) {
-      const g = this.glued[i];
-      if (!this.prizes.includes(g.p)) { this.glued.splice(i, 1); continue; }
-      const m = g.p.parts[0].body.mass();
-      const weak = m > g.thr || (shake && m > g.thr * 0.6 && Math.random() < 0.35);
-      if (weak && (shake || (this.state === 'lift' && this.stateT > g.at))) {
-        this.world.removeImpulseJoint(g.joint, true);
-        this.glued.splice(i, 1);
-      }
-    }
   }
 
   /** J 字フック(先端が上向き)。ハブの下に固定。シャフト → 半円 → 先端 */
@@ -356,6 +304,182 @@ export class Sim {
       RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z).setRotation(rot).setLinearDamping(lin).setAngularDamping(ang).setCanSleep(!noSleep),
     );
   }
+
+
+  // ---- スタッカー台: 左右に動く箱をタイミングよく落として積み上げる ----
+  static readonly STACK_GOAL = 5; // 土台の上に積む段数
+  towerLayout = false; // 箱を柱状に積み上げた配置(崩す台)
+  private stack: Prize[] = [];
+  private stackCarry: Prize | null = null;
+  private stackDrop: Prize | null = null;
+  private stackRewards: Array<[PrizeType, number]> = [];
+  private stackT = 0;
+
+  /** 積み木(残り) = 土台を含む段数 */
+  get stackLevel() { return this.stack.length; }
+
+  private clearStacker() {
+    for (const p of this.prizes.filter((q) => q.keep)) {
+      for (const pt of p.parts) this.world.removeRigidBody(pt.body);
+      this.prizes.splice(this.prizes.indexOf(p), 1);
+    }
+    this.stack = [];
+    this.stackCarry = null;
+    this.stackDrop = null;
+  }
+
+  private spawnBlock(level: number, x: number, y: number, z: number) {
+    const p = this.spawn('box', level % 3, x, y, z);
+    p.keep = true;
+    p.parts[0].body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+    return p;
+  }
+
+  private makeCarry() {
+    const hp = this.hubPos;
+    const p = this.spawnBlock(this.stack.length, hp.x, hp.y - 0.07, hp.z);
+    p.parts[0].body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+    this.stackCarry = p;
+  }
+
+  private resetStacker() {
+    this.clearStacker();
+    const base = this.spawnBlock(0, 0, 0.045, 0);
+    for (let i = 0; i < 40; i++) this.simStep();
+    this.stack = [base];
+    this.stackT = -0.71;
+    this.hubPos.x = -0.3; this.hubPos.z = 0; this.hubPos.y = Y_TOP;
+    this.makeCarry();
+  }
+
+  private stepStacker(dt: number, inp: Input) {
+    const hp = this.hubPos;
+    const n = this.stack.length;
+    this.stackT += dt * (1 + 0.08 * (n - 1));
+    hp.x = 0.3 * Math.sin(this.stackT * 2.2);
+    hp.z += (0 - hp.z) * Math.min(1, dt * 4);
+    hp.y += (0.08 * n + 0.23 - hp.y) * Math.min(1, dt * 4);
+    this.moveVel = 0.5;
+    const c = this.stackCarry;
+    if (c) c.parts[0].body.setNextKinematicTranslation({ x: hp.x, y: hp.y - 0.07, z: hp.z });
+    this.timer -= dt;
+    if ((inp.drop || this.timer <= 0) && c) {
+      if (this.timer <= 0) this.events.push({ type: 'timeout' });
+      this.events.push({ type: 'dropStart' });
+      c.parts[0].body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+      c.parts[0].body.setLinvel({ x: 0, y: 0, z: 0 }, true); // 動いていた勢いは持ち越さず、真下に落とす
+      c.parts[0].body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      this.stackDrop = c;
+      this.stackCarry = null;
+      this.state = 'settle';
+      this.stateT = 0;
+    }
+  }
+
+  private stepSettle() {
+    const d = this.stackDrop;
+    if (!d) { this.state = 'return'; return; }
+    if (this.stateT < 1.5) return;
+    const b = d.parts[0].body, t = b.translation(), v = b.linvel();
+    if (Math.hypot(v.x, v.y, v.z) > 0.12 && this.stateT < 4) return; // 静止するまで待つ
+    const n = this.stack.length;
+    let ok = t.y > 0.08 * n + 0.04 - 0.025 && Math.abs(t.x) < 0.2 && Math.abs(t.z) < 0.15;
+    this.stack.forEach((p, i) => { if (p.parts[0].body.translation().y < 0.08 * i + 0.04 - 0.03) ok = false; }); // 崩れていないか
+    this.stackDrop = null;
+    if (!ok) { this.state = 'return'; this.stateT = 0; return; }
+    this.stack.push(d);
+    if (this.stack.length - 1 >= Sim.STACK_GOAL) {
+      const r = this.stackRewards.length ? this.stackRewards[Math.floor(Math.random() * this.stackRewards.length)] : (['figure', 0] as [PrizeType, number]);
+      const prize: Prize = { id: this.nextId++, type: r[0], variant: r[1], parts: [], cooldown: 0 };
+      this.won++;
+      this.events.push({ type: 'win', prize });
+      this.state = 'return';
+      this.stateT = 0;
+      return;
+    }
+    this.makeCarry();
+    this.timer = 20;
+    this.state = 'ready';
+    this.stateT = 0;
+  }
+
+
+  // ---- 固定粘着バー: 台に固定された粘着テープ付きのレール。景品が貼り付き、アームで剥ぎ取る ----
+  stickyBars = false;
+  private barBodies: RAPIER.RigidBody[] = [];
+  private sticky = new Map<number, { p: Prize; a: { x: number; y: number; z: number }; S: number }>();
+  private stickCool = new Map<number, number>();
+  private stickTick = 0;
+  private stickClock = 0; // 貼り付き用の時計(秒)。simStep ごとに進む
+
+  setStickyBars(on: boolean) {
+    if (on === this.stickyBars) return;
+    for (const b of this.barBodies) this.world.removeRigidBody(b);
+    this.barBodies = [];
+    this.sticky.clear();
+    this.stickyBars = on;
+    if (!on) return;
+    for (const z of STICKY_BARS.zs) {
+      const b = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, STICKY_BARS.y, z));
+      this.world.createCollider(RAPIER.ColliderDesc.cuboid(STICKY_BARS.hx, STICKY_BARS.hy, STICKY_BARS.hz).setFriction(1.2).setRestitution(0).setCollisionGroups(G_ALL), b);
+      this.barBodies.push(b);
+    }
+  }
+
+  /** 景品 p を粘着バーから剥がす(ばね力と回転ロックを解除) */
+  private unstick(id: number) {
+    const st = this.sticky.get(id);
+    if (!st) return;
+    const b = st.p.parts[0].body;
+    b.setEnabledRotations(true, true, true, true);
+    this.sticky.delete(id);
+    this.stickCool.set(id, this.stickClock + 1.2); // しばらくは貼り直らない
+  }
+
+  /** 貼り付き判定 + 粘着力(ばね)。1 ステップごとに呼ぶ */
+  private applySticky(dt: number) {
+    if (!this.stickyBars) return;
+    this.stickClock += dt;
+    // 1) バーの上面に触れている景品は、軽いものほど「ちょっとしたこと」で貼り付く
+    if ((this.stickTick++ & 3) === 0) {
+      const top = STICKY_BARS.y + STICKY_BARS.hy;
+      const hit = new Set<number>();
+      for (const z of STICKY_BARS.zs) {
+        this.world.intersectionsWithShape({ x: 0, y: top + 0.004, z }, { x: 0, y: 0, z: 0, w: 1 }, new RAPIER.Cuboid(STICKY_BARS.hx, 0.004, STICKY_BARS.hz), (c) => {
+          const par = c.parent();
+          if (par) hit.add(par.handle);
+          return true;
+        }, undefined, G_CLAW);
+      }
+      for (const p of this.prizes) {
+        if (p.anim || this.sticky.has(p.id) || p.keep) continue;
+        const b = p.parts[0].body;
+        if (!hit.has(b.handle) || (this.stickCool.get(p.id) ?? 0) > this.stickClock) continue;
+        const v = b.linvel();
+        if (Math.hypot(v.x, v.y, v.z) > 0.25) continue;
+        const prob = Math.min(1, 0.6 * (0.1 / Math.max(0.02, b.mass())));
+        if (Math.random() > prob) continue;
+        const t = b.translation();
+        this.sticky.set(p.id, { p, a: { x: t.x, y: t.y, z: t.z }, S: Sim.STICK_FORCE * (0.85 + Math.random() * 0.3) });
+        b.setEnabledRotations(false, false, false, false);
+      }
+    }
+    // 2) 貼り付いている景品: ばねで引き戻す。大きく引き離されたら剥がれる
+    for (const [id, st] of this.sticky) {
+      if (!this.prizes.includes(st.p)) { this.sticky.delete(id); continue; }
+      const b = st.p.parts[0].body, t = b.translation(), v = b.linvel();
+      const dx = st.a.x - t.x, dy = st.a.y - t.y, dz = st.a.z - t.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d > Sim.PEEL_DIST) { this.unstick(id); continue; }
+      if (b.isSleeping() || (d < 1e-5 && Math.hypot(v.x, v.y, v.z) < 0.02)) continue;
+      let fx = 2500 * dx - 18 * v.x, fy = 2500 * dy - 18 * v.y, fz = 2500 * dz - 18 * v.z;
+      const f = Math.hypot(fx, fy, fz);
+      if (f > st.S) { const k = st.S / f; fx *= k; fy *= k; fz *= k; }
+      b.applyImpulse({ x: fx * dt, y: fy * dt, z: fz * dt }, true);
+    }
+  }
+  static readonly STICK_FORCE = 2.4; // N(貼り付きの強さ)
+  static readonly PEEL_DIST = 0.014; // m(これだけ引き離されたら剥がれる)
 
   // ---- 地形 ----
   terrain: TerrainKind = 'flat';
@@ -413,6 +537,7 @@ export class Sim {
   }
 
   private simStep() {
+    this.applySticky(Sim.H);
     if (this.waterLevel !== null) this.applyWater(Sim.H);
     this.world.step();
   }
@@ -739,25 +864,30 @@ export class Sim {
       // ポテトチップス BIG: 空気がたっぷり入った大きなビニール袋(約 20x26cm, 厚み最大 7cm)。
       // 3 節: 下の圧着ひれ - ふくらんだ本体 - 上の圧着ひれ。ひれは厚み数 mm のぺらぺらで、つまんで持ち上げられる。
       // 中身はほとんど空気なので超軽く(約 0.15kg)、空気抵抗でふわっと落ちる
+      // variant 3 = 白黒パッケージの 4 倍サイズ(体積 約 4 倍: 幅 x1.1 / 高さ x1.5 / 厚み x2.4)。落下口(25cm 角)を通れる幅に抑え、中身はほぼ空気なので軽さはそのまま
+      const [kx, ky, kz] = variant === 3 ? CHIPS_XL : [1, 1, 1];
       const tilt = Math.random() < 0.75 ? (Math.random() < 0.5 ? Math.PI / 2 : -Math.PI / 2) : 0;
       const q = this.pile ? rot : qMul(qY(yaw), qXm(tilt));
+      const dk = variant === 3 ? 1 / 3 : 1;
       const SEG = [
-        { c: -0.115, hh: 0.0175, hz: 0.004, d: 200 },
-        { c: 0.0, hh: 0.095, hz: 0.035, d: 60 },
-        { c: 0.115, hh: 0.0175, hz: 0.004, d: 200 },
+        { c: -0.115 * ky, hh: 0.0175, hz: 0.004, d: 200 },
+        { c: 0.0, hh: 0.095 * ky, hz: 0.035 * kz, d: 60 * dk },
+        { c: 0.115 * ky, hh: 0.0175, hz: 0.004, d: 200 },
       ];
       const bodies = SEG.map((sg) => {
         const o = rotate(q, { x: 0, y: sg.c, z: 0 });
         const b = this.makeBody(x + o.x, y + o.y, z + o.z, q, 0.6, 2.2);
-        w.createCollider(RAPIER.ColliderDesc.cuboid(0.1, sg.hh, sg.hz).setDensity(sg.d).setFriction(1.0).setRestitution(0).setCollisionGroups(G_ALL), b);
+        w.createCollider(RAPIER.ColliderDesc.cuboid(0.1 * kx, sg.hh, sg.hz).setDensity(sg.d).setFriction(1.0).setRestitution(0).setCollisionGroups(G_ALL), b);
         return b;
       });
-      for (const [i, jy] of [[0, -0.095], [1, 0.095]] as Array<[number, number]>) {
+      const stf = variant === 3 ? 3 : 1; // 大きいほど慣性が増えるので、ひれのばねも強める
+      for (const [i, jy0] of [[0, -0.095], [1, 0.095]] as Array<[number, number]>) {
+        const jy = jy0 * ky;
         const jd = RAPIER.JointData.revolute({ x: 0, y: jy - SEG[i].c, z: 0 }, { x: 0, y: jy - SEG[i + 1].c, z: 0 }, { x: 1, y: 0, z: 0 });
         const joint = w.createImpulseJoint(jd, bodies[i], bodies[i + 1], true) as RAPIER.RevoluteImpulseJoint;
         joint.setLimits(-1.3, 1.3);
         joint.configureMotorModel(RAPIER.MotorModel.ForceBased);
-        joint.configureMotorPosition(0, 0.003, 0.002);
+        joint.configureMotorPosition(0, 0.003 * stf, 0.002 * stf);
       }
       for (const b of bodies) prize.parts.push({ body: b, role: 'torso' });
     } else if (type === 'gpubox') {
@@ -818,17 +948,43 @@ export class Sim {
 
   /** 景品をすべて入れ直し、静止するまで先行シミュレーション */
   refill(plan: Array<[PrizeType, number]>, pile = false) {
-    this.releaseGlue();
+    this.sticky.clear();
     for (const p of this.prizes) for (const pt of p.parts) this.world.removeRigidBody(pt.body);
     for (const d of this.debris) this.world.removeRigidBody(d.body);
     this.debris = [];
     this.prizes = [];
     this.prevVel.clear();
     this.pile = pile;
+    this.stack = [];
+    this.stackCarry = null;
+    this.stackDrop = null;
+    if (this.clawMode === 'stacker') {
+      this.stackRewards = [...plan];
+      this.resetStacker();
+      this.events = [];
+      return;
+    }
     plan = [...plan].sort(() => Math.random() - 0.5);
     const cols = 4;
     plan.forEach(([t, v], i) => {
       let x: number, z: number;
+      if (this.stickyBars) {
+        // 粘着バーの上に並べる(3 本 x 5 か所)
+        const bar = i % STICKY_BARS.zs.length, slot = Math.floor(i / STICKY_BARS.zs.length) % 5;
+        const p = this.spawn(t, v, -0.4 + slot * 0.2 + (Math.random() - 0.5) * 0.02, STICKY_BARS.y + STICKY_BARS.hy + 0.06, STICKY_BARS.zs[bar]);
+        p.parts[0].body.setRotation(qY((Math.random() - 0.5) * 0.2), true);
+        for (let k = 0; k < 30; k++) this.simStep();
+        return;
+      }
+      if (this.towerLayout) {
+        // 柱状に積み上げる: 下の段から順に、各柱へ 1 個ずつ
+        const col = TOWER_COLS[i % TOWER_COLS.length], layer = Math.floor(i / TOWER_COLS.length);
+        const px = col[0] + (Math.random() - 0.5) * 0.02, pz = col[1] + (Math.random() - 0.5) * 0.02;
+        const p = this.spawn(t, v, px, layer * 0.082 + 0.05, pz);
+        p.parts[0].body.setRotation(qY((Math.random() - 0.5) * 0.35), true);
+        for (let k = 0; k < 30; k++) this.simStep();
+        return;
+      }
       if (pile) {
         // 雑然と積み上げ: ランダムな位置・向きで落として自然な山を作る
         do {
@@ -867,6 +1023,80 @@ export class Sim {
     this.prevVel.clear();
   }
 
+  /** いまある景品はそのままに、景品を追加で落として積む。追加できた個数を返す */
+  addPrizes(plan: Array<[PrizeType, number]>): number {
+    if (this.clawMode === 'stacker') return 0;
+    // 柱状配置: 一番低い柱の上に積む
+    const colTop = (cx: number, cz: number) => {
+      let top = 0;
+      for (const p of this.prizes) {
+        const t = p.parts[0].body.translation();
+        if (Math.abs(t.x - cx) < 0.13 && Math.abs(t.z - cz) < 0.13) top = Math.max(top, t.y + 0.04);
+      }
+      return top;
+    };
+    let added = 0;
+    for (const [t, v] of [...plan].sort(() => Math.random() - 0.5)) {
+      let x: number, z: number, y: number;
+      if (this.stickyBars) {
+        const slots: Array<[number, number]> = [];
+        for (const bz of STICKY_BARS.zs) for (let k = 0; k < 5; k++) slots.push([-0.4 + k * 0.2, bz]);
+        const free = slots.filter(([sx, sz]) => !this.prizes.some((q) => {
+          const b = q.parts[0].body.translation();
+          return Math.abs(b.x - sx) < 0.1 && Math.abs(b.z - sz) < 0.07 && b.y < 0.3;
+        }));
+        if (!free.length) continue;
+        const sl = free[Math.floor(Math.random() * free.length)];
+        x = sl[0]; z = sl[1]; y = STICKY_BARS.y + STICKY_BARS.hy + 0.06;
+      } else if (this.towerLayout) {
+        const cols = TOWER_COLS.map((c) => ({ c, top: colTop(c[0], c[1]) })).sort((p, q) => p.top - q.top);
+        x = cols[0].c[0] + (Math.random() - 0.5) * 0.02;
+        z = cols[0].c[1] + (Math.random() - 0.5) * 0.02;
+        y = cols[0].top + 0.06;
+      } else {
+        // 空いている場所をランダムに探し、そこにある景品の上から落とす
+        let best = { x: 0, z: 0, top: Infinity };
+        for (let k = 0; k < 12; k++) {
+          // 整列配置は元の範囲(落下口から離れた奥側)に、山積みは全域(落下口の手前は除く)に落とす
+          const hi = this.pile ? 0.4 : 0.1;
+          const cx = -0.4 + Math.random() * (hi + 0.4), cz = -0.4 + Math.random() * (hi + 0.4);
+          if (this.pile && cx > 0.1 && cz > 0.1) continue;
+          let top = terrainHeightAt(this.terrain, cx, cz);
+          for (const p of this.prizes) {
+            const b = p.parts[0].body.translation();
+            if (Math.hypot(b.x - cx, b.z - cz) < 0.14) top = Math.max(top, b.y + 0.06);
+          }
+          if (top < best.top) best = { x: cx, z: cz, top };
+        }
+        if (!isFinite(best.top)) continue;
+        x = best.x; z = best.z; y = best.top + 0.15;
+      }
+      const p = this.spawn(t, v, x, y, z);
+      if (this.towerLayout) p.parts[0].body.setRotation(qY((Math.random() - 0.5) * 0.35), true);
+      for (let k = 0; k < 30; k++) this.simStep();
+      added++;
+    }
+    for (let i = 0; i < 500; i++) {
+      this.simStep();
+      if (i >= 60 && i % 30 === 0 && this.settledSpeed() < 0.06) break;
+    }
+    for (const p of [...this.prizes]) {
+      if (p.parts[0].body.translation().y < -0.2) {
+        this.sticky.delete(p.id);
+        for (const pt of p.parts) this.world.removeRigidBody(pt.body);
+        this.prizes.splice(this.prizes.indexOf(p), 1);
+      }
+    }
+    for (const p of this.prizes) if (!p.anim) for (const pt of p.parts) {
+      pt.body.setLinvel({ x: 0, y: 0, z: 0 }, false);
+      pt.body.setAngvel({ x: 0, y: 0, z: 0 }, false);
+      pt.body.sleep();
+    }
+    this.events = [];
+    this.prevVel.clear();
+    return added;
+  }
+
   /** 全景品の最大速度(線速度 + 角速度 x 0.1m)。静止判定用 */
   private settledSpeed() {
     let m = 0;
@@ -885,6 +1115,7 @@ export class Sim {
     this.setClaw(OPEN, 3);
     this.tiltTarget = 0;
     this.events.push({ type: 'clawOpen' });
+    if (this.clawMode === 'stacker') { this.stackT = -0.71; this.won0 = this.won; }
     return true;
   }
 
@@ -910,6 +1141,7 @@ export class Sim {
     this.stateT += dt;
     switch (this.state) {
       case 'ready': {
+        if (this.clawMode === 'stacker') { this.stepStacker(dt, inp); break; }
         const sp = 0.5;
         let mx = 0, mz = 0;
         if (inp.left) mx -= 1;
@@ -937,20 +1169,10 @@ export class Sim {
         hp.y -= 0.5 * dt;
         this.moveVel = 0.5;
         const low = this.yLow + terrainHeightAt(this.terrain, hp.x, hp.z);
-        if (this.clawMode === 'bar' && hp.y > low && this.barTouching(0.004).length) {
-          // 粘着バーが景品に触れた
-          this.state = 'stick';
-          this.stateT = 0;
-          this.glueDone = false;
-          break;
-        }
         if (hp.y <= low) {
           hp.y = low;
           this.stateT = 0;
-          if (this.clawMode === 'bar') {
-            this.state = 'stick';
-            this.glueDone = false;
-          } else if (this.clawMode === 'hook') {
+          if (this.clawMode === 'hook') {
             // フックは閉じない。降りたあと少し横(+x)に引いて、リングや持ち手の穴の下へ爪先を潜り込ませる
             this.state = 'sweep';
             this.sweepX0 = hp.x;
@@ -961,15 +1183,8 @@ export class Sim {
           }
         }
         break;
-      case 'stick':
-        // 少し押し付けて貼り付ける
-        if (this.stateT < 0.3) { hp.y -= 0.02 * dt; this.moveVel = 0.2; }
-        if (!this.glueDone && this.stateT > 0.35) { this.glueDone = true; this.glueTouching(); }
-        if (this.stateT > 0.9) {
-          this.state = 'lift';
-          this.stateT = 0;
-          this.events.push({ type: 'lift' });
-        }
+      case 'settle':
+        this.stepSettle();
         break;
       case 'sweep': {
         const goal = Math.min(BOUND, this.sweepX0 + 0.07);
@@ -991,9 +1206,8 @@ export class Sim {
         }
         break;
       case 'lift':
-        hp.y += (this.clawMode === 'hook' ? 0.3 : this.clawMode === 'bar' ? 0.35 : 0.45) * dt;
+        hp.y += (this.clawMode === 'hook' ? 0.3 : 0.45) * dt;
         this.moveVel = 0.5;
-        if (this.glued.length) this.updateGlue(false);
         if (hp.y >= Y_TOP) {
           hp.y = Y_TOP;
           this.state = 'carry';
@@ -1001,7 +1215,6 @@ export class Sim {
           // 上端ストッパーに当たる衝撃。握力が弱い時ほど景品が振り落とされやすい
           this.bumpT = 0;
           this.bumpAmp = 0.007 + Math.random() * 0.006;
-          if (this.glued.length) this.updateGlue(true);
           this.events.push({ type: 'bump' });
         }
         break;
@@ -1011,7 +1224,6 @@ export class Sim {
           this.state = 'release';
           this.stateT = 0;
           if (this.clawMode === 'hook') this.tiltTarget = -1.9; // 先端を下に向けて、引っ掛けた輪を外す
-          else if (this.clawMode === 'bar') this.releaseGlue();
           else this.setClaw(OPEN, 3);
           this.events.push({ type: 'release' });
         }
@@ -1023,13 +1235,17 @@ export class Sim {
           this.tiltTarget = 0;
         }
         break;
-      case 'return':
-        if (this.moveToward(START.x, START.z, 0.7, dt)) {
+      case 'return': {
+        const stk = this.clawMode === 'stacker';
+        if (stk) hp.y += (Y_TOP - hp.y) * Math.min(1, dt * 3);
+        if (this.moveToward(START.x, START.z, 0.7, dt) && (!stk || hp.y > Y_TOP - 0.02)) {
+          if (stk) this.resetStacker();
           this.state = 'idle';
           this.events.push({ type: 'end' });
           if (this.won === this.won0) this.events.push({ type: 'miss' });
         }
         break;
+      }
       default:
     }
     void prevState;
@@ -1105,8 +1321,15 @@ export class Sim {
     }
     for (const p of out) {
       this.prizes.splice(this.prizes.indexOf(p), 1);
-      this.won++;
-      this.events.push({ type: 'win', prize: p });
+      this.sticky.delete(p.id);
+      if (p.keep) {
+        // 積み木が落下口へ落ちただけ: 獲得にはしない
+        this.stack = this.stack.filter((q) => q !== p);
+        if (this.stackDrop === p) this.stackDrop = null;
+      } else {
+        this.won++;
+        this.events.push({ type: 'win', prize: p });
+      }
       for (const pt of p.parts) {
         this.prevVel.delete(pt.body.handle);
         this.world.removeRigidBody(pt.body);
