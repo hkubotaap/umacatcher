@@ -173,11 +173,14 @@ export class Sim {
   private nextId = 1;
   private prevVel = new Map<number, { x: number; y: number; z: number }>();
   static readonly H = 1 / 120;
+  /** ソルバー反復。増やすと積み重なった袋の震えが減る。ただし関節が固くなるので、袋の穴に引っ掛けるフック台では元の値にする */
+  static readonly ITERS_DEFAULT = 12;
+  static readonly ITERS_HOOK = 6;
 
   private constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = Sim.H;
-    this.world.numSolverIterations = 6; // 既定 4 → 積み重なった柔らかい袋の安定性を上げる
+    this.world.numSolverIterations = Sim.ITERS_DEFAULT; // 既定 4 → 積み重なった柔らかい袋(米袋の連結体)が起きたまま震え続けないよう、反復を増やす
     this.buildStatic();
     this.buildClaw();
   }
@@ -279,6 +282,7 @@ export class Sim {
     else if (mode === 'stacker') { /* 専用の当たり判定なし。積み木をぶら下げる */ }
     else this.buildFingers();
     this.clawMode = mode;
+    this.world.numSolverIterations = mode === 'hook' ? Sim.ITERS_HOOK : Sim.ITERS_DEFAULT;
     this.hubTilt = 0;
     this.tiltTarget = 0;
   }
@@ -1277,6 +1281,26 @@ export class Sim {
     if (n > 0) this.postStep(n * Sim.H);
   }
 
+  /**
+   * 連結した袋どうしの接触で起きる微小な震え(ビチビチ)を抑える。
+   * 景品がほぼ止まっているとき(アームから離れている間)だけ、小さな速度を毎ステップ減衰させる。
+   * 落下中や運搬中のような大きな動きには影響しない。減衰で止まれば、Rapier が自然に眠らせる。
+   */
+  private settleAssist(p: Prize, _dt: number, hubNear: boolean) {
+    if (p.anim || p.keep || this.waterLevel !== null || this.sticky.has(p.id)) return;
+    const hp = this.hubPos, t0 = p.parts[0].body.translation();
+    if (hubNear && Math.hypot(t0.x - hp.x, t0.z - hp.z) < 0.3) return;
+    for (const pt of p.parts) {
+      const b = pt.body;
+      if (b.isSleeping()) continue;
+      const v = b.linvel(), w = b.angvel();
+      if (Math.hypot(v.x, v.y, v.z) + 0.1 * Math.hypot(w.x, w.y, w.z) > 0.25) continue;
+      const k = 0.6;
+      b.setLinvel({ x: v.x * k, y: Math.abs(v.y) < 0.05 ? v.y * k : v.y, z: v.z * k }, false);
+      b.setAngvel({ x: w.x * k, y: w.y * k, z: w.z * k }, false);
+    }
+  }
+
   private static readonly MAX_V = 5; // m/s
   private static readonly MAX_W = 30; // rad/s
 
@@ -1284,8 +1308,10 @@ export class Sim {
     this.updateCreatures(dt);
     this.updateGpu(dt);
     const out: Prize[] = [];
+    const hubNear = this.state !== 'idle' && this.state !== 'return';
     for (const p of this.prizes) {
       p.cooldown -= dt;
+      this.settleAssist(p, dt, hubNear);
       for (const pt of p.parts) {
         const b = pt.body;
         if (b.isSleeping()) continue;

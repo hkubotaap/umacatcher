@@ -94,7 +94,7 @@ const purple = std('#6a3fd1', 0.45, 0.1);
 const pink = std('#ff6fb5', 0.4, 0.1);
 const dark = std('#1b1030', 0.8);
 
-let genre: Genre = GENRES[0];
+let genre: Genre = GENRES.find((g) => g.id === 'rice') ?? GENRES[0]; // 起動時の台はお米
 // 床 (落下口付き)
 const floorC = canvasTex(256, 256, () => {});
 const floorTex = floorC.tex;
