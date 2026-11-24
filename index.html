@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UMAキャッチャー</title>
+<style>
+  :root { --pink:#ff6fb5; --ink:#2a1450; --glass:rgba(30,14,60,.72); }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:#1a0d33; overflow:hidden; font-family:"Hiragino Maru Gothic ProN","Yu Gothic UI","Meiryo",sans-serif; color:#fff; user-select:none; }
+  canvas { display:block; width:100%; height:100%; }
+  .panel { position:fixed; background:var(--glass); border:1px solid rgba(255,255,255,.18); border-radius:12px; padding:10px 14px; backdrop-filter:blur(6px); }
+  #hud { top:12px; left:12px; min-width:190px; line-height:1.7; font-size:15px; }
+  #hud b { color:#ffd84a; font-size:18px; }
+  #tools { top:12px; right:12px; display:flex; gap:8px; flex-wrap:wrap; max-width:380px; justify-content:flex-end; }
+  #genres { top:12px; left:50%; transform:translateX(-50%); display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:center; max-width:56vw; }
+  #genres .lbl { font-size:13px; opacity:.85; }
+  button.ui.g.on { background:var(--pink); color:#fff; }
+  #views { bottom:12px; left:50%; transform:translateX(-50%); display:flex; gap:8px; align-items:center; }
+  button.ui { background:#fff; color:var(--ink); border:0; border-radius:8px; padding:8px 12px; font:inherit; font-size:14px; cursor:pointer; font-weight:700; }
+  button.ui:hover { background:#ffe3f1; }
+  button.ui:active { transform:translateY(1px); }
+  #toast { position:fixed; top:22%; left:50%; transform:translate(-50%,-50%) scale(.8); font-size:44px; font-weight:900; color:#fff; text-shadow:0 0 12px var(--pink), 0 3px 0 #b0287a; opacity:0; transition:opacity .25s, transform .25s; pointer-events:none; text-align:center; }
+  #toast.show { opacity:1; transform:translate(-50%,-50%) scale(1); }
+  #toast small { display:block; font-size:22px; margin-top:6px; }
+  #help { bottom:64px; left:12px; font-size:12.5px; line-height:1.6; opacity:.9; max-width:300px; }
+  #start { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(20,8,45,.86); z-index:10; text-align:center; gap:14px; }
+  #start h1 { font-size:44px; margin:0; text-shadow:0 0 14px var(--pink); }
+  #start p { margin:0; opacity:.85; }
+  #start button { font-size:22px; padding:14px 34px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud" class="panel">
+  所持金 <b id="wallet">2000</b> 円<br />
+  クレジット <b id="credit">0</b>　獲得 <b id="won">0</b><br />
+  <span id="yenRow" style="display:none">獲得総額 <b id="yen">0</b> 円<br /></span>
+  <span id="timerRow">残り <b id="timer">--</b> 秒</span>
+</div>
+<div id="genres" class="panel">
+  <span class="lbl">台:</span>
+  <button class="ui g" data-genre="plush">🧸 ぬいぐるみ</button>
+  <button class="ui g" data-genre="figure">🗿 フィギュア</button>
+  <button class="ui g" data-genre="game">🎮 ゲーム</button>
+  <button class="ui g" data-genre="candy">🍬 お菓子</button>
+  <button class="ui g" data-genre="rice">🍚 お米</button>
+  <button class="ui g" data-genre="chips">🥔 ポテチBIG</button>
+  <button class="ui g" data-genre="hook">🪝 リングフック</button>
+  <button class="ui g" data-genre="sticky">🍡 粘着バー</button>
+  <button class="ui g" data-genre="seafood">🦀 海鮮</button>
+  <button class="ui g" data-genre="gpu">🟩 グラボ</button>
+</div>
+<div id="tools" class="panel">
+  <button class="ui" id="mute">🔊 音 ON</button>
+  <button class="ui" id="terrain">地形: 平地</button>
+  <button class="ui" id="water">水: なし</button>
+  <button class="ui" id="layout">配置: 整列</button>
+  <button class="ui" id="refill">景品補充</button>
+</div>
+<div id="help" class="panel">
+  <b>操作</b><br />
+  ① 筐体右の<b>コイン投入口</b>をクリック (または C)<br />
+  ② 十字ボタンを押し続けてアーム移動 (矢印/WASD)<br />
+  ③ 赤い<b>DROP</b>ボタンで降下 (Space)<br />
+  ドラッグで視点回転 / ホイールでズーム
+</div>
+<div id="views" class="panel">
+  視点:
+  <button class="ui" data-view="front">正面</button>
+  <button class="ui" data-view="play">プレイ</button>
+  <button class="ui" data-view="left">左側面</button>
+  <button class="ui" data-view="right">右側面</button>
+  <button class="ui" data-view="top">真上</button>
+  <button class="ui" data-view="panel">ボタン</button>
+</div>
+<div id="toast"></div>
+<div id="start">
+  <h1>🐴 UMAキャッチャー</h1>
+  <p>物理エンジン搭載のリアルクレーンゲーム</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;max-width:640px">
+    <button class="ui g" data-genre="plush">🧸 ぬいぐるみ</button>
+    <button class="ui g" data-genre="figure">🗿 フィギュア</button>
+    <button class="ui g" data-genre="game">🎮 ゲーム</button>
+    <button class="ui g" data-genre="candy">🍬 お菓子</button>
+    <button class="ui g" data-genre="rice">🍚 お米</button>
+    <button class="ui g" data-genre="chips">🥔 ポテチBIG</button>
+    <button class="ui g" data-genre="hook">🪝 リングフック</button>
+  <button class="ui g" data-genre="sticky">🍡 粘着バー</button>
+    <button class="ui g" data-genre="seafood">🦀 海鮮(生きてます)</button>
+    <button class="ui g" data-genre="gpu">🟩 グラボ(GeForce RTX)</button>
+  </div>
+  <button class="ui" id="startBtn">プレイ開始</button>
+  <p style="font-size:13px">音が出ます。音量にご注意ください。</p>
+</div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
