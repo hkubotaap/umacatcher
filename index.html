@@ -24,6 +24,42 @@
   #toast.show { opacity:1; transform:translate(-50%,-50%) scale(1); }
   #toast small { display:block; font-size:22px; margin-top:6px; }
   #help { bottom:64px; left:12px; font-size:12.5px; line-height:1.6; opacity:.9; max-width:300px; }
+  #genreToggle { position:fixed; top:12px; left:50%; transform:translateX(-50%); display:none; z-index:5; }
+  /* スマホ・小さい画面: 台選択は「台」ボタンで開閉。説明やツールは小さく・隠してゲーム画面を広く使う */
+  @media (max-width:820px), (max-height:520px), (pointer:coarse) {
+    #genreToggle { display:block; padding:6px 14px; }
+    #genres { display:none; top:50px; max-width:92vw; max-height:62vh; overflow-y:auto; z-index:6; }
+    #genres.open { display:flex; }
+    #genres .lbl { display:none; }
+    #hud { top:8px; left:8px; min-width:0; padding:6px 10px; font-size:12px; line-height:1.45; }
+    #hud b { font-size:14px; }
+    #tools { top:52px; right:8px; max-width:62vw; padding:6px; gap:4px; }
+    #tools button.ui { padding:5px 8px; font-size:11px; }
+    #help { display:none; }
+    #views { bottom:6px; max-width:96vw; overflow-x:auto; padding:5px 8px; gap:4px; font-size:11px; white-space:nowrap; }
+    #views button.ui { padding:5px 8px; font-size:11px; }
+    #toast { font-size:28px; }
+    #toast small { font-size:15px; }
+    #start { overflow-y:auto; justify-content:flex-start; padding:20px 12px; }
+    #start h1 { font-size:30px; }
+    #start button { font-size:16px; padding:10px 20px; }
+  }
+  /* タッチ操作パッド(スマホ自動): 左に十字、右に DROP とコイン */
+  #pad { display:none; position:fixed; left:0; right:0; bottom:0; padding:0 14px calc(12px + env(safe-area-inset-bottom)); z-index:4; pointer-events:none; justify-content:space-between; align-items:flex-end; touch-action:none; }
+  #pad > * { pointer-events:auto; }
+  body.touch #pad { display:flex; }
+  body.touch #views, body.touch #help { display:none; }
+  #dpad { display:grid; grid-template-columns:repeat(3,58px); grid-template-rows:repeat(3,58px); gap:4px; }
+  #dpad button, #padR button { touch-action:none; -webkit-tap-highlight-color:transparent; border:2px solid rgba(255,255,255,.55); color:#fff; font:inherit; font-weight:900; background:rgba(30,14,60,.55); backdrop-filter:blur(4px); }
+  #dpad button { border-radius:14px; font-size:22px; }
+  #dpad button.on, #padR button.on { background:var(--pink); }
+  #dpad [data-act=back] { grid-column:2; grid-row:1; }
+  #dpad [data-act=left] { grid-column:1; grid-row:2; }
+  #dpad [data-act=right] { grid-column:3; grid-row:2; }
+  #dpad [data-act=front] { grid-column:2; grid-row:3; }
+  #padR { display:flex; flex-direction:column; align-items:flex-end; gap:12px; }
+  #padR .drop { width:96px; height:96px; border-radius:50%; font-size:20px; background:rgba(220,40,60,.8); }
+  #padR .coin { padding:10px 16px; border-radius:22px; font-size:15px; }
   #start { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(20,8,45,.86); z-index:10; text-align:center; gap:14px; }
   #start h1 { font-size:44px; margin:0; text-shadow:0 0 14px var(--pink); }
   #start p { margin:0; opacity:.85; }
@@ -38,6 +74,7 @@
   <span id="yenRow" style="display:none">獲得総額 <b id="yen">0</b> 円<br /></span>
   <span id="timerRow">残り <b id="timer">--</b> 秒</span>
 </div>
+<button class="ui" id="genreToggle">🎰 台を選ぶ</button>
 <div id="genres" class="panel">
   <span class="lbl">台:</span>
   <button class="ui g" data-genre="plush">🧸 ぬいぐるみ</button>
@@ -75,6 +112,18 @@
   <button class="ui" data-view="right">右側面</button>
   <button class="ui" data-view="top">真上</button>
   <button class="ui" data-view="panel">ボタン</button>
+</div>
+<div id="pad">
+  <div id="dpad">
+    <button data-act="back">▲</button>
+    <button data-act="left">◀</button>
+    <button data-act="right">▶</button>
+    <button data-act="front">▼</button>
+  </div>
+  <div id="padR">
+    <button class="coin" data-act="coin">🪙 コイン投入</button>
+    <button class="drop" data-act="drop">DROP</button>
+  </div>
 </div>
 <div id="toast"></div>
 <div id="start">

@@ -1708,7 +1708,8 @@ function setGenre(id: string) {
 function syncGenreButtons() {
   document.querySelectorAll<HTMLButtonElement>('[data-genre]').forEach((b) => b.classList.toggle('on', b.dataset.genre === genre.id));
 }
-document.querySelectorAll<HTMLButtonElement>('[data-genre]').forEach((b) => b.addEventListener('click', () => { audio.start(); setGenre(b.dataset.genre!); }));
+document.querySelectorAll<HTMLButtonElement>('[data-genre]').forEach((b) => b.addEventListener('click', () => { audio.start(); setGenre(b.dataset.genre!); document.getElementById('genres')?.classList.remove('open'); }));
+$('genreToggle').addEventListener('click', () => { audio.start(); $('genres').classList.toggle('open'); });
 syncGenreButtons();
 document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view!)));
 $('mute').addEventListener('click', () => {
@@ -1780,13 +1781,43 @@ function hideToast() {
 }
 
 // ---------- main loop ----------
+/** スマホ(タッチ端末)かどうか。自動で「スマホモード」(タッチパッド・プレイ視点・広い画角)にする */
+const isTouchDevice = () => matchMedia('(pointer:coarse)').matches || (navigator.maxTouchPoints > 0 && innerWidth < 900);
+let touchMode = false;
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
-  camera.aspect = innerWidth / innerHeight;
+  const aspect = innerWidth / innerHeight;
+  camera.aspect = aspect;
+  // 縦長画面では横の画角が狭くなって台が切れるので、横方向の画角が一定になるよう縦の画角を広げる
+  const hfov = 2 * Math.atan(Math.tan((45 * Math.PI) / 360) * 1.25);
+  camera.fov = aspect < 1.25 ? Math.min(85, (2 * Math.atan(Math.tan(hfov / 2) / aspect) * 180) / Math.PI) : 45;
   camera.updateProjectionMatrix();
+  const t = isTouchDevice();
+  if (t !== touchMode) {
+    touchMode = t;
+    document.body.classList.toggle('touch', t);
+    if (t) setView('play', true); // 初めてスマホモードになったら、遊びやすいプレイ視点にする
+  }
 }
 addEventListener('resize', resize);
 resize();
+
+// タッチパッド(十字キー・DROP・コイン): キーボード/3Dボタンと同じ入力経路に流す
+document.querySelectorAll<HTMLButtonElement>('#pad [data-act]').forEach((b) => {
+  const act = b.dataset.act!;
+  b.addEventListener('pointerdown', (ev) => {
+    ev.preventDefault();
+    audio.start();
+    b.setPointerCapture(ev.pointerId);
+    b.classList.add('on');
+    navigator.vibrate?.(8);
+    pressAction(act);
+  });
+  const up = () => { b.classList.remove('on'); if (act !== 'drop' && act !== 'coin') pressed.delete(act); };
+  b.addEventListener('pointerup', up);
+  b.addEventListener('pointercancel', up);
+  b.addEventListener('contextmenu', (e) => e.preventDefault());
+});
 
 const clock = new THREE.Clock();
 let lastSec = -1;
@@ -1840,6 +1871,7 @@ function handleEvents() {
 }
 
 const genresEl = $('genres');
+const genreToggleEl = $('genreToggle');
 function frame() {
   const dt = clock.getDelta();
   const input: Input = {
@@ -1910,6 +1942,8 @@ function frame() {
   $('credit').textContent = sim.state === 'idle' ? '0' : '1';
   // プレイ中は画面中央上の台選択を隠す(終わったら戻す)
   genresEl.style.display = sim.state === 'idle' ? '' : 'none';
+  genreToggleEl.style.display = sim.state === 'idle' ? '' : 'none';
+  if (sim.state !== 'idle') genresEl.classList.remove('open');
   $('won').textContent = String(sim.won);
   if (totalYen > 0) { $('yenRow').style.display = ''; $('yen').textContent = totalYen.toLocaleString('ja-JP'); }
   const sec = Math.ceil(sim.timer);
