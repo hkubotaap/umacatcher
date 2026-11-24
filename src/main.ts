@@ -1839,6 +1839,7 @@ function handleEvents() {
   sim.events.length = 0;
 }
 
+const genresEl = $('genres');
 function frame() {
   const dt = clock.getDelta();
   const input: Input = {
@@ -1907,6 +1908,8 @@ function frame() {
   // HUD
   $('wallet').textContent = String(wallet);
   $('credit').textContent = sim.state === 'idle' ? '0' : '1';
+  // プレイ中は画面中央上の台選択を隠す(終わったら戻す)
+  genresEl.style.display = sim.state === 'idle' ? '' : 'none';
   $('won').textContent = String(sim.won);
   if (totalYen > 0) { $('yenRow').style.display = ''; $('yen').textContent = totalYen.toLocaleString('ja-JP'); }
   const sec = Math.ceil(sim.timer);
